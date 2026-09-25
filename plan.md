@@ -1,8 +1,8 @@
-# 潜水艦ターン制ゲーム 実装計画
+# 潜水艦ターン制ゲーム Firebase 実装計画
 
 ## 1. 目的
 
-[`draft.md`](./draft.md) のゲームを、Cloudflare Workers + D1 上で動作するスマートフォン向けWebアプリとして実装する。初期リリースでは、パスコードで保護されたルームに2人が参加し、秘密情報を互いに漏らさず交互に行動できることを完成条件とする。
+[`draft.md`](./draft.md) のゲームを Firebase 上で動作するスマートフォン向け Web アプリとして実装する。初期リリースでは、パスコードで保護されたルームに2人が参加し、秘密情報を互いに漏らさず交互に行動できることを完成条件とする。
 
 本計画では「遊べる最小構成を早く検証する」ことを優先する。ルール数値は設定として分離し、先に複雑な演出やリアルタイム通信を作り込まない。
 
@@ -10,33 +10,34 @@
 
 ### 2.1 構成
 
-* **フロントエンド:** TypeScript + 軽量なUI構成（初回セットアップ時に React/Vite を第一候補として確定）
-* **API:** Cloudflare Workers の `fetch` ハンドラー
-* **静的配信:** Workers Static Assets。同一オリジンでUIと `/api/*` を配信する
-* **データベース:** D1。Wrangler の binding 名は `DB` とする
-* **状態同期:** 2秒程度の条件付きポーリング。`ETag` またはゲームの `version` が同じなら本文を省略する
-* **入力検証:** TypeScript のスキーマ検証ライブラリを採用し、すべてのAPI境界で検証する
-* **テスト:** ゲームルールの単体テスト、Worker APIの統合テスト、ブラウザの主要フローE2Eテスト
+* **フロントエンド:** TypeScript + React + Vite
+* **API:** TypeScript で実装する Cloud Functions for Firebase（第2世代）の HTTP 関数
+* **静的配信:** Firebase Hosting。`/api/**` を HTTP 関数へ rewrite し、UI と API を同一オリジンで配信する
+* **データベース:** Cloud Firestore（Native mode）。Admin SDK からのみ権威状態を読み書きする
+* **状態同期:** 2秒程度の条件付きポーリング。レスポンスの `version` が同じなら更新を省略する
+* **入力検証:** TypeScript のスキーマ検証ライブラリを採用し、すべての API 境界で検証する
+* **不正利用対策:** Firebase App Check と reCAPTCHA Enterprise provider を段階的に導入し、API 側のレート制限も併用する
+* **ローカル開発:** Firebase Local Emulator Suite で Hosting、Functions、Firestore をまとめて起動する
+* **テスト:** ゲームルールの単体テスト、Emulator を使う API 統合テスト、ブラウザの主要フロー E2E テスト
 
-WebSocket は初期版では使わない。2人用の交互手番ゲームではポーリングで要件を満たせ、切断復帰も単純になるためである。プレイテストで待ち時間が問題になった場合に限り、Durable Objects と WebSocket Hibernation API を比較検討する。
+WebSocket と Firestore クライアント SDK の直接購読は初期版では使わない。プレイヤーごとの秘密ビューを HTTP API だけで生成し、クライアントが完全なゲーム状態を直接読めない境界を保つためである。プレイテストで待ち時間が問題になった場合は、認可済みの公開ビュー専用ドキュメントを別途設計して Firestore リアルタイムリスナーを検討する。
 
 ### 2.2 サーバー権威モデル
 
-クライアントは希望する行動だけを送信する。移動可否、衝突、ソナー、魚雷移動、ダメージ、勝敗、候補領域はWorker側の純粋関数で計算し、D1へ保存する。クライアントが送った位置、HP、手番所有権を信用しない。
+クライアントは希望する行動だけを送信する。移動可否、衝突、ソナー、魚雷移動、ダメージ、勝敗、候補領域は Functions 側の純粋関数で計算し、Firestore へ保存する。クライアントが送った位置、HP、手番所有権を信用しない。
 
-APIの状態レスポンスは、完全なゲーム状態からプレイヤーごとのビューを毎回生成する。相手の未観測情報をいったんクライアントへ送り、CSSで隠す実装は禁止する。
+API の状態レスポンスは、完全なゲーム状態からプレイヤーごとのビューを毎回生成する。相手の未観測情報をいったんクライアントへ送り、CSS で隠す実装は禁止する。Firestore Security Rules はクライアントからの全アクセスを拒否し、権威データは Admin SDK を使う Functions だけが扱う。
 
-### 2.3 Cloudflare公式資料の確認結果
+### 2.3 Firebase 公式資料の確認結果
 
-2026-09-24 時点の公式ドキュメント（公式 `cloudflare-docs` リポジトリを含む）に基づき、次を前提とする。
+2026-09-25 時点の Firebase 公式ドキュメントに基づき、次を前提とする。実装開始時と依存バージョン更新時にも再確認する。
 
-* [Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/) はWorkerと静的アセットを同じデプロイで扱える
-* [D1 Workers Binding API](https://developers.cloudflare.com/d1/worker-api/d1-database/) は `env` のbindingからprepared statementとbatchを利用できる
-* [D1のクエリ指針](https://developers.cloudflare.com/d1/best-practices/query-d1/) に従い、ユーザー入力を文字列連結せずbindする
-* [Workers Secrets](https://developers.cloudflare.com/workers/configuration/secrets/) を本番の秘密値に使用する
-* [Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/) でGitHub連携によるビルド・デプロイが可能
-
-実装開始時にもバージョン固定前に、Wrangler、Workers、D1、採用ライブラリの最新公式資料と互換性を再確認する。
+* [Firebase Hosting と Cloud Functions](https://firebase.google.com/docs/hosting/functions) に従い、Hosting rewrite で HTTP 関数へ動的リクエストを転送する
+* [Cloud Functions 第2世代への移行ガイド](https://firebase.google.com/docs/functions/2nd-gen-upgrade) に従い、第2世代 API を採用し、リージョン、タイムアウト、同時実行数を明示する
+* [Functions の環境設定](https://firebase.google.com/docs/functions/config-env) に従い、秘密値は Secret Manager と Functions の secret parameter を使用し、`.env` やリポジトリへ保存しない
+* [Firestore の transaction](https://firebase.google.com/docs/firestore/manage-data/transactions) に従い、読み取りを更新より前に行い、競合時に再実行されても安全な処理だけを transaction callback に置く
+* [Firebase Local Emulator Suite](https://firebase.google.com/docs/emulator-suite) をローカル・CI の統合テストに使用する
+* [Web 向け App Check](https://firebase.google.com/docs/app-check/web/recaptcha-enterprise-provider) と [カスタムバックエンドでの token 検証](https://firebase.google.com/docs/app-check/custom-resource-backend) に従い、HTTP 関数で `X-Firebase-AppCheck` token を検証する。検証失敗のメトリクスを確認してから拒否を有効化する
 
 ## 3. 初期版の確定仕様
 
@@ -49,93 +50,96 @@ APIの状態レスポンスは、完全なゲーム状態からプレイヤー�
 3. ゲストがルームコードとパスコードで参加し、ゲスト用トークンを受け取る。
 4. 両者が初期位置・向きを送る。相手の配置は公開しない。
 5. 両者の確定後、サーバーが先手を決定してゲームを開始する。
-6. 手番ごとに1行動を解決する。HPが0以下になった時点で勝者を確定する。
+6. 手番ごとに1行動を解決する。HP が0以下になった時点で勝者を確定する。
 7. 終了後は結果のみを表示する。再戦は新しいルームを作ることで行う。
 
-ルームの有効期限は設定値とし、初期値は「待機中24時間、終了後24時間」を候補にする。Cron Triggerによる削除は運用フェーズで追加し、それまでは期限切れ判定によって利用を拒否する。
+待機中と終了後の有効期限は設定値とし、初期値は各24時間とする。Firestore の TTL policy は削除が即時ではないため、API は `expiresAt` を必ず検査して期限切れを拒否する。TTL は不要データの非同期削除にだけ利用する。
 
 ### 3.2 手番と行動
 
 初期行動は `MOVE_FORWARD`、`TURN_LEFT`、`TURN_RIGHT`、`ACTIVE_SONAR`、`FIRE_TORPEDO` とする。後退、待機、高速移動、損傷システムは対象外とする。
 
-行動リクエストは `expectedVersion` とクライアント生成の `actionId` を含む。サーバーは次の順序で処理する。
+行動リクエストは `expectedVersion` とクライアント生成の `actionId` を含む。サーバーは Firestore transaction 内で次の順序により処理する。
 
-1. トークンからプレイヤーを認証する。
-2. ルームが `playing` で、送信者の手番であることを確認する。
-3. `expectedVersion` が現在値と一致することを確認する。
-4. 行動のルール上の妥当性を検証する。
-5. 潜水艦の行動、既存魚雷の移動、衝突とダメージ、観測情報、勝敗を決定論的に解決する。
-6. `actionId` を記録し、状態と `version` を条件付きで更新する。
-7. 同じ `actionId` の再送には、二重適用せず以前の結果を返す。
+1. token hash からプレイヤーを認証する。
+2. action ドキュメントを調べ、同じ `actionId` の完了済み結果があれば返す。
+3. room が `playing` で、送信者の手番であることを確認する。
+4. `expectedVersion` が現在値と一致することを確認する。
+5. 行動のルール上の妥当性を検証する。
+6. 潜水艦、魚雷、衝突、ダメージ、観測情報、勝敗を決定論的に解決する。
+7. room と action を同一 transaction で保存し、`version` を増やす。
 
-D1への更新は、`UPDATE ... WHERE id = ? AND version = ?` の更新件数を確認する楽観ロックを中心に設計する。複数文を不可分に保存する必要がある箇所はD1の `batch()` を使用し、実装時にローカルとpreview環境の競合テストで挙動を確認する。
+Transaction callback は競合時に複数回実行され得るため、乱数、ログ送信、外部 API 呼び出しなどの副作用を置かない。先手決定などの乱数値は transaction の外で生成して入力とし、再試行中は同じ値を使う。
 
 ### 3.3 暫定ゲームパラメータ
 
 * 盤面: 横12 × 縦15
-* 潜水艦: 各1隻、初期HP 100
+* 潜水艦: 各1隻、初期 HP 100
 * 直撃ダメージ: 70
 * 隣接マスのダメージ: 25
-* 潜水艦と魚雷: 1手番の解決につき1マス（詳細な移動タイミングはルールテストで固定）
+* 潜水艦と魚雷: 1手番の解決につき1マス
 * 魚雷所持数: 各3発
 * アクティブソナー: 射程と遮蔽を設定ファイルで管理
 
-数値は確定値ではない。`src/shared/game-config.ts` のような共有設定に集約し、保存済みゲームには設定バージョンを記録する。
+数値は `src/shared/game-config.ts` のような共有設定に集約し、保存済みゲームには設定バージョンを記録する。
 
-## 4. データ設計
+## 4. Firestore データ設計
 
-最初のmigrationで以下を作成する。IDは外部から連番を推測できないランダムIDとする。
+次の collection を作成する。ID は暗号学的乱数から生成し、連番を使わない。権威状態は1つの room ドキュメントにまとめ、1手番の更新を単一 transaction で完結させる。
 
-### `rooms`
+### `rooms/{roomId}`
 
-* `id`, `room_code`（一意）、`status`
-* `passcode_hash`, `passcode_salt`, `passcode_iterations`
-* `game_state_json`（完全な権威状態）
-* `turn_player_id`, `turn_number`, `version`, `rules_version`
-* `winner_player_id`, `created_at`, `updated_at`, `expires_at`
+* `roomCode`, `status`
+* `passcodeHash`, `passcodeSalt`, `passcodeIterations`
+* `gameState`（完全な権威状態。Firestore のドキュメントサイズ上限を監視する）
+* `turnPlayerId`, `turnNumber`, `version`, `rulesVersion`
+* `winnerPlayerId`, `createdAt`, `updatedAt`, `expiresAt`
 
-### `players`
+### `rooms/{roomId}/players/{playerId}`
 
-* `id`, `room_id`, `seat`（`host` / `guest`、ルーム内で一意）
-* `display_name`
-* `token_hash`（再接続トークンそのものは保存しない）
-* `knowledge_state_json`（そのプレイヤーが知る観測履歴）
-* `placement_ready`, `joined_at`, `last_seen_at`
+* `seat`（`host` / `guest`）、`displayName`
+* `tokenHash`（再接続トークンそのものは保存しない）
+* `knowledgeState`（そのプレイヤーが知る観測履歴）
+* `placementReady`, `joinedAt`, `lastSeenAt`
 
-### `actions`
+### `rooms/{roomId}/actions/{actionId}`
 
-* `id`（`actionId`）、`room_id`, `player_id`, `turn_number`
-* `action_type`, `action_payload_json`, `result_summary_json`, `created_at`
-* `(room_id, id)` を一意にし、冪等性を保証する
+* `playerId`, `turnNumber`, `actionType`, `actionPayload`, `resultSummary`, `createdAt`
 
-JSON列にはTypeScript側でバージョン付きスキーマを定義する。索引は `room_code`、`players.room_id`、`actions(room_id, turn_number)`、`expires_at` に作成する。migrationにはdown相当の復旧手順もコメントで残す。
+### `roomCodes/{normalizedRoomCode}`
 
-## 5. API設計
+* `roomId`, `expiresAt`
 
-すべてJSON、同一オリジン、`/api/v1` 配下とする。トークンは `Authorization: Bearer` で送り、URL、アクセスログ、localStorageへ不用意に露出させない。ブラウザでの永続化方式は脅威モデルを確認して実装段階で決定する。
+ルームコードを document ID にして transaction 内で存在確認・予約し、一意性を保証する。複合クエリは `firestore.indexes.json` に明示し、Security Rules は `firestore.rules` と Emulator テストで管理する。Firestore の自動 ID やランダム ID を使用し、連続 ID による書き込み hotspot を避ける。
+
+## 5. API 設計
+
+すべて JSON、同一オリジン、`/api/v1` 配下とする。Hosting rewrite は `/api/**` のみを API 関数へ送り、それ以外は SPA へ fallback する。再接続トークンは `Authorization: Bearer` で送り、URL、アクセスログ、`localStorage` へ不用意に露出させない。
 
 * `POST /api/v1/rooms` — ルーム作成
 * `POST /api/v1/rooms/:code/join` — パスコードを検証して参加
 * `GET /api/v1/rooms/:code/state` — 認証プレイヤー専用ビューを取得
 * `POST /api/v1/rooms/:code/placement` — 初期配置を確定
 * `POST /api/v1/rooms/:code/actions` — 行動を冪等に送信
-* `POST /api/v1/rooms/:code/leave` — 待機中の退出（対戦開始後は投了として将来追加）
+* `POST /api/v1/rooms/:code/leave` — 待機中の退出
 * `GET /api/v1/health` — 秘密情報を含まない死活確認
 
-エラーは `{ code, message, requestId }` 形式に統一し、`400`（入力不正）、`401`（認証失敗）、`403`（権限なし）、`404`（列挙を防ぐため存在・資格情報不一致を必要に応じ統一）、`409`（満員・古いversion・手番競合）、`429`（試行過多）を使い分ける。
+エラーは `{ code, message, requestId }` 形式に統一し、`400`、`401`、`403`、`404`、`409`、`429` を使い分ける。App Check は正規クライアントの証明を補助するものであり、プレイヤー認証、入力検証、レート制限の代替にはしない。
 
 ## 6. セキュリティと不正対策
 
-* パスコードは長さと試行回数を制限し、Web Crypto APIのPBKDF2（ランダムsalt、十分な反復回数）で導出したhashだけを保存する。反復回数は計測して決め、将来変更できるよう行ごとに保存する
-* 再接続トークンは暗号学的乱数で生成し、D1にはSHA-256 hashだけを保存する
-* ルーム作成・参加・状態取得・行動へIPとルーム単位のrate limitを設ける。Cloudflare固有機能の採用時は公式資料を再確認する
-* 表示名、コード、JSONサイズ、座標、列挙値をサーバーで検証する
-* CORSは同一オリジンだけを基本とし、CSP、`X-Content-Type-Options`、適切なReferrer Policyを返す
-* ログにはパスコード、Bearer token、完全なゲーム状態、相手の秘密情報を記録しない
-* ルームコードは共有用の識別子であって認証情報とは見なさない
-* APIレスポンスのスナップショットテストで、敵座標などの禁止フィールドがないことを確認する
+* パスコードは長さと試行回数を制限し、Node.js の暗号 API による PBKDF2（ランダム salt、十分な反復回数）で導出した hash だけを保存する
+* 再接続トークンは暗号学的乱数で生成し、Firestore には SHA-256 hash だけを保存する
+* Firestore Rules は権威 collection へのクライアント読み書きを deny by default にする
+* App Check token は HTTP 関数でまず監視モードとして検証し、正規トラフィックを確認してから不正 token の拒否を有効化する。開発用 debug token は秘密として扱う
+* ルーム作成・参加・状態取得・行動へ IP、App Check token、room を組み合わせたレート制限を設ける。Functions の instance ごとのメモリだけに依存しない
+* Secret Manager に登録した secret は必要な関数だけへ bind する
+* 表示名、コード、JSON サイズ、座標、列挙値をサーバーで検証する
+* CORS は同一オリジンだけを基本とし、CSP、`X-Content-Type-Options`、Referrer Policy を返す
+* Cloud Logging へパスコード、Bearer token、完全なゲーム状態、相手の秘密情報を出さない
+* API レスポンスのスナップショットテストで、敵座標などの禁止フィールドがないことを確認する
 
-## 7. 画面とUX
+## 7. 画面と UX
 
 1. **トップ:** ルーム作成 / 参加を選択
 2. **作成:** 表示名、パスコード入力、ルームコードのコピー
@@ -144,147 +148,116 @@ JSON列にはTypeScript側でバージョン付きスキーマを定義する。
 5. **対戦:** 盤面、自艦、候補領域、手番、HP、魚雷数、行動パネル、イベント履歴
 6. **結果:** 勝敗、主要な行動履歴、トップへ戻る
 
-スマートフォン縦画面（幅360pxを下限目安）で、盤面全体と現在の手番をスクロールせず認識できることを目指す。色だけに依存せず、模様・アイコン・テキストを併用する。通信中、古い状態、再接続中、相手待ちを明確に区別し、二重送信をUIとサーバーの両方で防ぐ。
+スマートフォン縦画面（幅360pxを下限目安）で、盤面全体と現在の手番をスクロールせず認識できることを目指す。色だけに依存せず、模様・アイコン・テキストを併用する。通信中、古い状態、再接続中、相手待ちを明確に区別し、二重送信を UI とサーバーの両方で防ぐ。
 
 ## 8. 実装フェーズと受け入れ条件
 
-### Phase 0: 土台
+### Phase 0: Firebase 基盤
 
-* TypeScriptのWorkersプロジェクト、静的アセット、formatter、lint、testをセットアップ
-* `wrangler.jsonc` にD1 bindingと環境別設定を定義
-* ADRとして採用ライブラリ、認証方式、魚雷の更新順を記録
-* CIで型検査、lint、単体テスト、migration適用テストを実行
+* npm workspace で Web と Functions の TypeScript プロジェクトをセットアップする
+* `firebase.json` に Hosting rewrite、Emulator、Firestore Rules / indexes を定義する
+* `.firebaserc` には本番 project ID を固定せず、`.firebaserc.example` と `firebase use` の手順を用意する
+* `/api/v1/health` と空の UI を実装する
+* formatter、lint、型検査、単体テストを用意する
+* CI は Emulator を起動して rules と API のテストを実行し、認証には Workload Identity Federation を使う。長期サービスアカウント鍵は保存しない
 
-**完了条件:** 空のUIと `/api/v1/health` がローカルで起動し、CIとpreview deployが成功する。
+**完了条件:** UI と health API が Emulator で起動し、CI が成功する。
 
 ### Phase 1: ルームと認証
 
-* D1 migration、repository層、パスコードhash、トークン認証を実装
-* 作成・参加・待機・再読み込み復帰の画面とAPIを実装
-* 満員、誤パスコード、重複参加、期限切れをテスト
+* Firestore repository、Rules、indexes、パスコード hash、token 認証を実装
+* 作成・参加・待機・再読み込み復帰の画面と API を実装
+* 満員、誤パスコード、重複参加、期限切れ、transaction 競合をテスト
 
-**完了条件:** 2つの独立したブラウザコンテキストが同じルームへ安全に参加でき、3人目が拒否される。
+**完了条件:** 2つの独立したブラウザコンテキストが安全に参加でき、3人目が拒否される。
 
 ### Phase 2: ゲームエンジン
 
 * 座標、向き、地形、移動、旋回を副作用のない関数として実装
-* ソナーの範囲・遮蔽、観測履歴、候補領域を実装
-* 魚雷、衝突、近接ダメージ、HP、勝敗を実装
-* 固定seedの盤面生成と設定バージョンを実装
+* ソナー、観測履歴、候補領域、魚雷、ダメージ、勝敗を実装
+* 固定 seed の盤面生成と設定バージョンを実装
 
 **完了条件:** 代表例と境界条件を単体テストで再現でき、同じ入力列から常に同じ結果になる。
 
 ### Phase 3: 対戦進行
 
-* 初期配置、先手決定、行動API、楽観ロック、冪等性を実装
+* 初期配置、先手決定、行動 API、transaction、冪等性を実装
 * プレイヤー別ビューとイベント履歴を実装
 * ポーリング、競合時の再取得、切断復帰を実装
 
-**完了条件:** 二重送信・古いversion・複数タブを含む統合テストで状態が壊れず、敵の秘密情報がレスポンスにない。
+**完了条件:** 二重送信・古い version・複数タブを含む Emulator 統合テストで状態が壊れず、敵の秘密情報がレスポンスにない。
 
-### Phase 4: UIとゲーム体験
+### Phase 4: UI とゲーム体験
 
 * モバイル盤面、候補領域、ソナー、魚雷情報、HP、手番表示を実装
 * 操作確認、ローディング、エラー、再接続、勝敗画面を実装
 * キーボード操作、フォーカス、コントラスト、動きの低減設定を確認
 
-**完了条件:** 360px幅とデスクトップで、2人が説明なしに作成から決着まで進行できる。
+**完了条件:** 360px 幅とデスクトップで、2人が説明なしに作成から決着まで進行できる。
 
 ### Phase 5: 検証とリリース
 
-* E2E、負荷、rate limit、ログの秘匿、依存関係監査を実行
-* D1のpreview環境でmigration、バックアップ・復旧手順を検証
-* Cloudflareのpreview URLで2人プレイテストを行い、パラメータを調整
-* production D1を作成し、migration後にWorkerをデプロイ
-* エラー率、APIレイテンシ、競合率を監視し、ロールバック手順を文書化
+* E2E、負荷、App Check、レート制限、ログの秘匿、依存関係監査を実行
+* Firebase preview channel で Hosting と Functions の結合を検証
+* Firestore の managed export と復旧手順、TTL、予算アラートを確認
+* production project へ Rules、indexes、Functions、Hosting の順でデプロイ
+* Functions のエラー率・レイテンシ・instance 数、Firestore の読み書き数と競合率を監視
 
-**完了条件:** リリースチェックリストを満たし、productionでスモークテストが成功し、既知の問題が記録されている。
+**完了条件:** リリースチェックリストを満たし、production のスモークテストが成功し、既知の問題が記録されている。
 
-## 9. Codex Cloudで実装する手順
+## 9. Codex Cloud で実装する手順
 
-各タスクは小さなPR単位にし、Codexに「変更、テスト、ドキュメント更新」をまとめて依頼する。巨大な一括実装は避ける。
+各タスクは小さな PR 単位にし、変更、テスト、ドキュメント更新をまとめる。本番 Firebase credential や secret を Codex の作業環境へ渡さない。
 
-### 9.1 事前準備（人が行う）
-
-1. GitHub上にリポジトリと保護された既定ブランチを用意する。
-2. Codex CloudのEnvironmentを作成し、このリポジトリへ接続する。
-3. Setup scriptには依存関係のinstallだけを記述する。Cloudflare API tokenや本番credentialは置かない。
-4. Codexのタスクで必要なチェックコマンド（例: `npm run check && npm test`）をEnvironmentの案内に記載する。
-5. Cloudflareへのデプロイは、レビュー済みPRのmerge後にCloudflare Workers Buildsまたは専用CIで行う。Codexの作業環境に本番secretを渡さない。
-
-### 9.2 Codexへ渡す共通指示
-
-各プロンプトに次を含める。
+推奨順序は、Firebase 基盤、ルーム repository / API、ルーム UI、ゲームエンジン、対戦 API、対戦 UI、運用強化とする。各 PR では次を確認する。
 
 * 最初に `AGENTS.md`、`draft.md`、`plan.md` と既存コードを読む
-* 外部サービスや依存ライブラリは、変更前に最新の公式ドキュメントを確認する
-* ゲームルールはサーバー権威、プレイヤー別ビュー、D1の楽観ロックを崩さない
-* モジュールと関数に意図を説明する日本語コメントを付ける（自明な逐語コメントは避ける）
-* migration、型、単体/統合テスト、関連ドキュメントを同じPRで更新する
-* 実行したコマンドと未実施理由をPR本文へ記載する
-* UI変更ではモバイル幅を確認し、スクリーンショットを添付する
-
-### 9.3 推奨タスク順とプロンプト例
-
-1. **基盤PR:** 「Phase 0だけを実装してください。Cloudflare公式資料で現在の推奨構成を確認し、Workers Static Assets + D1のTypeScriptプロジェクト、ローカル開発、CIを用意してください。」
-2. **ルームPR:** 「Phase 1のD1 migrationとrepository/APIを実装してください。パスコードとトークンを平文保存せず、列挙・総当たり・3人目参加をテストしてください。」
-3. **ルームUI PR:** 「作成、参加、待機、再接続UIを実装してください。APIの秘密情報をログへ出さず、360px幅のE2Eとスクリーンショットを追加してください。」
-4. **エンジンPR:** 「Phase 2を純粋関数として実装してください。仕様上曖昧な魚雷更新順はADRに選択肢と決定を記録し、表形式の境界値テストを追加してください。」
-5. **対戦API PR:** 「Phase 3の配置・行動・プレイヤー別状態APIを実装してください。expectedVersionとactionIdで競合と再送を安全に処理し、秘密情報の非漏洩をテストしてください。」
-6. **対戦UI PR:** 「Phase 4の盤面と対戦操作を実装してください。相手待ち、再接続、古いversion、勝敗を扱い、アクセシビリティとモバイル表示を確認してください。」
-7. **強化PR:** 「Phase 5のE2E、負荷・セキュリティ確認、運用runbook、preview検証手順を追加してください。本番変更はせず、人が行う手順を明記してください。」
-
-### 9.4 各PRのレビューゲート
-
-Codexの作業結果をそのままmergeせず、以下を人が確認する。
-
-* scopeが該当Phaseに収まり、無関係な依存追加や設定変更がない
-* SQL migrationを既存データを想定してレビューした
-* APIレスポンスとログに相手の秘密情報・credentialがない
-* 競合、再送、切断、誤パスコード、満員の失敗系テストがある
-* 公式資料のURLと確認日がPRに記録されている
-* 自動チェックがすべて成功し、UI変更は実機相当サイズで確認済みである
-
-指摘は同じCodexタスクへ具体的に返し、修正後に差分とテストを再確認する。mergeは常に人が判断する。
+* Firebase と依存ライブラリの最新公式資料を変更前に確認する
+* transaction の再実行、プレイヤー別ビュー、deny by default の Rules を崩さない
+* モジュールと関数に意図を説明する日本語コメントを付ける
+* Rules、indexes、型、単体 / Emulator 統合テスト、関連文書を同じ PR で更新する
+* 実行したコマンドと未実施理由、公式資料の URL と確認日を PR 本文へ記載する
+* UI 変更では 360px 幅を確認してスクリーンショットを添付する
 
 ## 10. テスト計画
 
 ### 単体テスト
 
-盤外移動、岩礁衝突、全方向の旋回、ソナー遮蔽、候補領域の拡大、魚雷の正面・後方・側面、同時にHPが0になる場合、設定バージョンを検証する。乱数を使う処理はseedまたは乱数注入で再現可能にする。
+盤外移動、岩礁衝突、全方向の旋回、ソナー遮蔽、候補領域、魚雷、同時撃沈、設定バージョンを検証する。乱数を使う処理は seed または乱数注入で再現可能にする。
 
-### 統合テスト
+### Rules / 統合テスト
 
-ローカルD1へmigrationを適用し、ルーム作成から終了までをAPI経由で検証する。特に同じversionへの並行行動、同じactionIdの再送、別プレイヤーのトークン、改ざん座標、期限切れを含める。
+Emulator Suite へ Rules と indexes を読み込み、クライアント SDK から権威 collection を読み書きできないことを Rules Unit Testing Library で検証する。Functions API 経由でルーム作成から終了までを検証し、同じ version への並行行動、同じ actionId の再送、別プレイヤーの token、改ざん座標、期限切れ、transaction retry を含める。
 
-### E2Eテスト
+### E2E テスト
 
 2つのブラウザコンテキストでホストとゲストを操作する。作成、参加、配置、移動、ソナー、発射、被弾、勝敗、リロード復帰を通す。レスポンス監視で敵の座標が対戦相手へ渡らないことも検証する。
 
 ### 非機能テスト
 
-モバイル表示、キーボード操作、色覚に依存しない表現、低速回線、ポーリングの負荷、D1競合、rate limit、ログのマスキングを確認する。
+モバイル表示、キーボード操作、色覚に依存しない表現、低速回線、ポーリング負荷、Firestore transaction 競合、App Check、レート制限、Cloud Logging のマスキング、Functions の cold start と同時実行を確認する。
 
-## 11. 未決事項（実装前にADRで決める）
+## 11. 未決事項（実装前に ADR で決める）
 
-* 魚雷を「各プレイヤーの行動後」と「1ラウンド終了後」のどちらで動かすか
-* 魚雷同士、魚雷と岩礁、同時撃沈をどう解決するか
-* ソナーの形状、射程、岩礁端での遮蔽アルゴリズム
-* 初期配置可能範囲と、地形の固定/seed生成
-* 候補領域の濃淡をルールベースでどう算出するか
-* 切断時の勝敗、投了、手番タイムアウトを初期版へ含めるか
-* ブラウザ内の再接続トークン保存方式とXSS/利便性のトレードオフ
-* D1の状態JSONを正規化する時期と、古い `rules_version` の扱い
+* 魚雷の更新タイミング、衝突、同時撃沈の解決順
+* ソナー形状、遮蔽、候補領域の算出方法
+* 初期配置可能範囲と地形生成
+* 切断時の勝敗、投了、手番タイムアウト
+* 再接続 token のブラウザ内保存方式
+* Firestore 1 MiB ドキュメント上限を踏まえた履歴の分割時期
+* Functions のリージョン、min / max instances、concurrency と費用上限
+* App Check enforcement の開始条件と障害時の切り戻し
+* polling からリアルタイム更新へ移行する判断基準
 
-これらは実装者の暗黙判断にせず、ゲーム体験・悪用耐性・テスト容易性を比較して記録する。
+これらは実装者の暗黙判断にせず、ゲーム体験、悪用耐性、費用、テスト容易性を比較して記録する。
 
-## 12. 初期版のDefinition of Done
+## 12. 初期版の Definition of Done
 
 * 2人がパスコード付きルームを作成・参加し、第三者は参加・閲覧できない
-* 配置から決着まで、ルールに従って交互にプレイできる
+* 配置から決着までルールに従って交互にプレイできる
 * リロードや一時切断から本人として復帰できる
-* 二重送信と競合でゲーム状態が破損しない
-* 相手の未観測情報がAPI、HTML、ログに漏れない
-* 単体・統合・E2E・型検査・lintがCIで成功する
+* 二重送信と transaction 競合でゲーム状態が破損しない
+* 相手の未観測情報が API、HTML、Firestore Rules、ログから漏れない
+* 単体、Rules、Emulator 統合、E2E、型検査、lint が CI で成功する
 * 主要なスマートフォン幅とキーボード操作で利用できる
-* D1 migration、preview、production deploy、rollback、監視の手順が文書化されている
+* Firebase preview、production deploy、Firestore export / restore、rollback、監視の手順が文書化されている
