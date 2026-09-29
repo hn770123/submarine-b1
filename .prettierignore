@@ -1,0 +1,11 @@
+package-lock.json
+node_modules
+functions/lib
+web/dist
+plan.md
+draft.md
+image-generation-prompts.md
+AGENTS.md
+*-debug.log
+test-results
+playwright-report

@@ -1,0 +1,144 @@
+/* 深海の色と操作・状態表示の基本トークン。360px 幅でも横スクロールを作らない。 */
+:root {
+  font-family: system-ui, sans-serif;
+  color: #e6f5f7;
+  background: #061d28;
+  --surface: #0b2c38;
+  --line: #537a87;
+  --accent: #a4f1df;
+  --danger: #ffc5af;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+main {
+  width: min(100%, 540px);
+  margin: auto;
+  padding: 32px 20px;
+}
+h1 {
+  font-size: 2.5rem;
+  margin: 8px 0;
+}
+h2 {
+  font-size: 1.25rem;
+}
+.eyebrow {
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  font-size: 0.75rem;
+}
+.intro,
+.hint,
+small {
+  color: #b9d3dc;
+  line-height: 1.6;
+}
+section {
+  margin-top: 28px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 20px;
+  border-radius: 12px;
+}
+.modes {
+  display: flex;
+  gap: 8px;
+}
+.modes button {
+  flex: 1;
+  padding: 10px 6px;
+}
+button,
+input {
+  font: inherit;
+  min-height: 44px;
+  border-radius: 6px;
+}
+button {
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  padding: 10px 14px;
+  cursor: pointer;
+}
+button[aria-pressed="true"],
+.primary {
+  background: var(--accent);
+  color: #062520;
+  font-weight: 700;
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid #ffe1a3;
+  outline-offset: 3px;
+}
+label {
+  display: block;
+  margin: 20px 0;
+}
+input {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+  padding: 10px;
+  color: #e6f5f7;
+  background: #061d28;
+  border: 1px solid #81a2ae;
+}
+.primary {
+  width: 100%;
+}
+.hint,
+small {
+  font-size: 0.8rem;
+}
+.code {
+  font:
+    bold clamp(1.2rem, 5.5vw, 1.65rem) ui-monospace,
+    monospace;
+  letter-spacing: 0.06em;
+  overflow-wrap: anywhere;
+}
+.players {
+  padding: 0;
+  list-style: none;
+}
+.players li {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.players span {
+  display: block;
+  color: #b9d3dc;
+  font-size: 0.8rem;
+}
+.notice {
+  border-left: 3px solid #ffe1a3;
+  padding-left: 12px;
+  line-height: 1.6;
+}
+.error {
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  padding: 12px;
+}
+.secondary {
+  margin-top: 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

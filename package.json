@@ -1,0 +1,33 @@
+{
+  "name": "submarine-b1",
+  "private": true,
+  "workspaces": [
+    "functions",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
+    "test": "vitest run tests/engine.test.ts tests/crypto.test.ts",
+    "test:integration": "vitest run tests/integration.test.ts tests/rules.test.ts",
+    "test:e2e": "playwright test",
+    "emulators": "firebase emulators:start --project demo-submarine",
+    "verify:emulators": "firebase emulators:exec --project demo-submarine 'npm run test:integration && npm run test:e2e'",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.0",
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "firebase": "^12.0.0",
+    "firebase-admin": "^14.5.0",
+    "firebase-tools": "^15.32.0",
+    "prettier": "^3.6.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^5.0.2"
+  }
+}

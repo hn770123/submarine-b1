@@ -1,0 +1,42 @@
+{
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs22",
+    "predeploy": ["npm run build --workspace @submarine/functions"]
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "hosting": {
+    "public": "web/dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "/api/**",
+        "function": { "functionId": "api", "region": "asia-northeast1" }
+      },
+      { "source": "**", "destination": "/index.html" }
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          { "key": "X-Content-Type-Options", "value": "nosniff" },
+          { "key": "Referrer-Policy", "value": "no-referrer" },
+          {
+            "key": "Content-Security-Policy",
+            "value": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+          }
+        ]
+      }
+    ]
+  },
+  "emulators": {
+    "functions": { "host": "127.0.0.1", "port": 5001 },
+    "firestore": { "host": "127.0.0.1", "port": 8080 },
+    "hosting": { "host": "0.0.0.0", "port": 5000 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}
