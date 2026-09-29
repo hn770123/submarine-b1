@@ -17,7 +17,7 @@
 * **状態同期:** 2秒程度の条件付きポーリング。レスポンスの `version` が同じなら更新を省略する
 * **入力検証:** TypeScript のスキーマ検証ライブラリを採用し、すべての API 境界で検証する
 * **不正利用対策:** Firebase App Check と reCAPTCHA Enterprise provider を段階的に導入し、API 側のレート制限も併用する
-* **ローカル開発:** Firebase Local Emulator Suite で Hosting、Functions、Firestore をまとめて起動する
+* **開発環境:** GitHub Codespaces 上で Codex を動かす。Firebase Local Emulator Suite で Hosting、Functions、Firestore をまとめて起動する
 * **テスト:** ゲームルールの単体テスト、Emulator を使う API 統合テスト、ブラウザの主要フロー E2E テスト
 
 WebSocket と Firestore クライアント SDK の直接購読は初期版では使わない。プレイヤーごとの秘密ビューを HTTP API だけで生成し、クライアントが完全なゲーム状態を直接読めない境界を保つためである。プレイテストで待ち時間が問題になった場合は、認可済みの公開ビュー専用ドキュメントを別途設計して Firestore リアルタイムリスナーを検討する。
@@ -198,7 +198,7 @@ Transaction callback は競合時に複数回実行され得るため、乱数�
 
 外部ツールは一度にすべて導入しない。まず紙プロトタイプとデザインファイルで方向性を決め、実装が始まった時点で部品カタログと自動スクリーンショットを追加する。外部サービスへゲームの秘密値、個人情報、本番画面データを渡さない。
 
-Codex Cloud では生成画像などのバイナリを含む PR を作成せず、再生成可能なプロンプトと選定基準だけを管理する。生成、目視確認、Web 用最適化、バイナリの追加はローカル環境で行い、コード変更とは分離した素材 PR とする。画像が未導入でも CSS の代替背景で全主要フローを操作できる状態を保つ。
+必要な生成画像は Codespaces の作業ブランチへ取り込み、目視確認と Web 用最適化を済ませて、使用する UI の変更と同じ PR に含める。再生成用のプロンプトと生成条件も記録する。画像が未導入でも CSS の代替背景で全主要フローを操作できる状態を保つ。
 
 ### 7.5 ユーザーテスト計画
 
@@ -279,20 +279,19 @@ Codex Cloud では生成画像などのバイナリを含む PR を作成せず�
 
 **完了条件:** リリースチェックリストを満たし、production のスモークテストが成功し、既知の問題が記録されている。
 
-## 9. Codex Cloud で実装する手順
+## 9. Codespaces 上の Codex で実装・PR 作成する手順
 
-各タスクは小さな PR 単位にし、変更、テスト、ドキュメント更新をまとめる。本番 Firebase credential や secret を Codex の作業環境へ渡さない。
+開発は Codespaces の同じチェックアウトで進め、各タスクの変更、テスト、関連文書、必要な画像を小さな PR 単位にまとめる。実装順序と完了条件は第8節に従う。
 
-推奨順序は、Firebase 基盤、ルーム repository / API、ルーム UI、ゲームエンジン、対戦 API、対戦 UI、運用強化とする。各 PR では次を確認する。
+1. **作業開始:** `git status` で既存の変更を確認し、作業ブランチを用意する。`AGENTS.md`、`draft.md`、本計画と対象コードを読み、今回の完了条件を確認する。
+2. **環境確認:** Codespaces のターミナルでリポジトリのルートから Codex を起動する。Node.js、Firebase CLI、Emulator に必要な Java、GitHub CLI の利用可否を確認し、プロジェクトで指定した依存関係をインストールする。環境の再現に必要な設定は Phase 0 で `.devcontainer` と開発手順にまとめる。
+3. **実装:** Firebase と依存ライブラリの最新公式資料を変更前に確認する。モジュールと関数に日本語のヘッダーコメントを付け、処理の意図も日本語で説明する。変更に関係する Rules、indexes、型、テスト、文書を更新する。
+4. **動作確認:** Emulator 上で対象機能を確認し、変更に必要な型検査、lint、単体・統合・E2E テストを実行する。ブラウザ確認には Codespaces のポート転送を使い、UI 変更では360px幅を確認してスクリーンショットを残す。
+5. **差分確認と PR:** `git diff` を確認して commit・push し、GitHub CLI の `gh pr create` または GitHub の画面で PR を作成する。本文とコメントは日本語で、変更内容、実行した検証、未実施の検証と理由、参照した公式資料の URL と確認日を記載する。CLI で複数行の本文を渡す場合はファイルに保存して `--body-file` を使う。
 
-* 最初に `AGENTS.md`、`draft.md`、`plan.md` と既存コードを読む
-* Firebase と依存ライブラリの最新公式資料を変更前に確認する
-* transaction の再実行、プレイヤー別ビュー、deny by default の Rules を崩さない
-* モジュールと関数に意図を説明する日本語コメントを付ける
-* Rules、indexes、型、単体 / Emulator 統合テスト、関連文書を同じ PR で更新する
-* 実行したコマンドと未実施理由、公式資料の URL と確認日を PR 本文へ記載する
-* UI 変更では 360px 幅を確認してスクリーンショットを添付する
-* 生成画像が必要な場合は `image-generation-prompts.md` を更新し、Codex Cloud の PR にはバイナリを含めない。画像の生成と追加はローカル環境の素材 PR に分離する
+transaction の再実行、プレイヤー別ビュー、deny by default の Rules を保つ。本番 Firebase credential や secret は通常の開発環境へ渡さず、開発・テストは Emulator を使う。デプロイは Phase 5 の手順で扱う。
+
+手順の参照先（2026-09-29 確認）: [Codex CLI](https://learn.chatgpt.com/docs/codex/cli)、[Codespaces のポート転送](https://docs.github.com/en/codespaces/developing-in-a-codespace/forwarding-ports-in-your-codespace)、[GitHub CLI の PR 作成](https://cli.github.com/manual/gh_pr_create)。
 
 ## 10. テスト計画
 

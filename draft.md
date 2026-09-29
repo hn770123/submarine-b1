@@ -2,7 +2,7 @@
 
 > 本書はゲームルールと体験の設計を扱う。Firebase を利用する初期版の実装範囲、
 > API、Firestore のデータ設計、
-> Codex Cloud を使った開発手順は [`plan.md`](./plan.md) を参照する。
+> Codespaces 上の Codex を使った開発手順は [`plan.md`](./plan.md) を参照する。
 
 1. コンセプト
 
