@@ -15,6 +15,27 @@ const entry = z
   })
   .strict();
 const roomCode = z.string().regex(/^[A-F0-9]{12}$/);
+// 行動 ID はクライアントごとに生成する UUID とし、Firestore のパスとして安全に扱う。
+const placementInput = z
+  .object({
+    x: z.number().int(),
+    y: z.number().int(),
+    direction: z.enum(["N", "E", "S", "W"]),
+  })
+  .strict();
+const actionInput = z
+  .object({
+    actionId: z.string().uuid(),
+    expectedVersion: z.number().int().positive(),
+    action: z.enum([
+      "MOVE_FORWARD",
+      "TURN_LEFT",
+      "TURN_RIGHT",
+      "ACTIVE_SONAR",
+      "FIRE_TORPEDO",
+    ]),
+  })
+  .strict();
 /** Authorization ヘッダー以外からの token 入力を禁止する。 */
 function bearer(req: Request, required = true): string | undefined {
   const value = req.get("authorization");
@@ -95,6 +116,31 @@ export function createApp(repository: RoomRepository) {
         return;
       }
       res.json(state);
+    }),
+  );
+  app.post(
+    "/api/v1/rooms/:code/placement",
+    route(async (req, res) => {
+      const code = roomCode.parse(String(req.params.code).toUpperCase());
+      const pose = placementInput.parse(req.body);
+      res.json(await repository.placement(code, bearer(req)!, pose));
+    }),
+  );
+  app.post(
+    "/api/v1/rooms/:code/actions",
+    route(async (req, res) => {
+      const code = roomCode.parse(String(req.params.code).toUpperCase());
+      const data = actionInput.parse(req.body);
+      await repository.rateLimit(`action:${code}:${bearer(req)!}`, 30);
+      res.json(
+        await repository.action(
+          code,
+          bearer(req)!,
+          data.actionId,
+          data.expectedVersion,
+          data.action,
+        ),
+      );
     }),
   );
   app.post(

@@ -251,3 +251,128 @@ describe("ルーム API", () => {
     ).rejects.toMatchObject({ status: 429 });
   });
 });
+
+describe("対戦進行 API", () => {
+  /** 二席を作り、互いに離れた配置で対戦を開始する。 */
+  async function started() {
+    const host = await create();
+    const joined = await call(`/rooms/${host.roomCode}/join`, {
+      displayName: "ゲスト",
+      passcode: "secret12",
+    });
+    const guest = joined.data as JoinedRoom;
+    const path = `/rooms/${host.roomCode}`;
+    const first = await call(
+      `${path}/placement`,
+      { x: 2, y: 1, direction: "S" },
+      host.token,
+    );
+    expect(first.status).toBe(200);
+    expect(first.data.status).toBe("placement");
+    const hidden = JSON.stringify(
+      await call(`${path}/state`, undefined, guest.token),
+    );
+    expect(hidden).not.toContain('"placement":{"x":2');
+    const second = await call(
+      `${path}/placement`,
+      { x: 9, y: 13, direction: "N" },
+      guest.token,
+    );
+    expect(second.status).toBe(200);
+    expect(second.data.status).toBe("playing");
+    return { host, guest, path };
+  }
+  it("配置域を検証し、敵の配置を伏せて先手を決める", async () => {
+    const { host, guest, path } = await started();
+    const repeated = await call(
+      `${path}/placement`,
+      { x: 2, y: 1, direction: "S" },
+      host.token,
+    );
+    expect(repeated.status).toBe(200);
+    const hostState = await call(`${path}/state`, undefined, host.token);
+    const guestState = await call(`${path}/state`, undefined, guest.token);
+    expect(
+      [hostState.data.game.yourTurn, guestState.data.game.yourTurn].filter(
+        Boolean,
+      ),
+    ).toHaveLength(1);
+    expect(hostState.data.game.self).toMatchObject({ x: 2, y: 1 });
+    expect(guestState.data.game.self).toMatchObject({ x: 9, y: 13 });
+    expect(repeated.data.version).toBe(hostState.data.version);
+    for (const state of [hostState, guestState]) {
+      expect(state.data.game).not.toHaveProperty("submarines");
+      expect(state.data.game).not.toHaveProperty("torpedoes");
+      expect(state.data.game).not.toHaveProperty("gameState");
+      expect(state.data).not.toHaveProperty("placement");
+    }
+    expect(
+      (
+        await call(
+          `${path}/placement`,
+          { x: 0, y: 0, direction: "N" },
+          host.token,
+        )
+      ).data.code,
+    ).toBe("PLACEMENT_LOCKED");
+  });
+  it("二重送信・古い version・複数タブの競合を直列化する", async () => {
+    const { host, guest, path } = await started();
+    const h = await call(`${path}/state`, undefined, host.token);
+    const actor = h.data.game.yourTurn ? host : guest;
+    const other = actor === host ? guest : host;
+    const version = h.data.version;
+    const actionId = crypto.randomUUID();
+    const body = { actionId, expectedVersion: version, action: "TURN_LEFT" };
+    const results = await Promise.all([
+      call(`${path}/actions`, body, actor.token),
+      call(`${path}/actions`, body, actor.token),
+    ]);
+    expect(results.map((r) => r.status)).toEqual([200, 200]);
+    expect(results[0].data).toEqual(results[1].data);
+    expect(results[0].data.version).toBe(version + 1);
+    expect(
+      (
+        await call(
+          `${path}/actions`,
+          { ...body, action: "TURN_RIGHT" },
+          actor.token,
+        )
+      ).data.code,
+    ).toBe("ACTION_ID_REUSED");
+    const next = await call(`${path}/state`, undefined, other.token);
+    expect(next.data.game.yourTurn).toBe(true);
+    const stale = await call(
+      `${path}/actions`,
+      {
+        actionId: crypto.randomUUID(),
+        expectedVersion: version,
+        action: "TURN_RIGHT",
+      },
+      other.token,
+    );
+    expect(stale.data.code).toBe("STALE_VERSION");
+    const concurrent = await Promise.all(
+      ["TURN_LEFT", "TURN_RIGHT"].map((action) =>
+        call(
+          `${path}/actions`,
+          {
+            actionId: crypto.randomUUID(),
+            expectedVersion: next.data.version,
+            action,
+          },
+          other.token,
+        ),
+      ),
+    );
+    expect(concurrent.map((r) => r.status).sort()).toEqual([200, 403]);
+    const latest = await call(`${path}/state`, undefined, host.token);
+    expect(latest.data.version).toBe(version + 2);
+    expect(latest.data.game.history).toHaveLength(2);
+    expect(
+      latest.data.game.history.some(
+        (item: { action: string }) => item.action === "OPPONENT_TURN",
+      ),
+    ).toBe(true);
+  }, 20_000);
+});

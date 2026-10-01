@@ -1,4 +1,4 @@
-/** 二つの独立ブラウザで参加・再読み込み復帰と三人目の拒否を確認する。 */
+/** 二つの独立ブラウザで参加・配置・行動・復帰と三人目の拒否を確認する。 */
 import { test, expect } from "@playwright/test";
 test("作成・参加・復帰・満員・360px 表示", async ({ browser }) => {
   const hostContext = await browser.newContext({
@@ -32,12 +32,8 @@ test("作成・参加・復帰・満員・360px 表示", async ({ browser }) => 
   await guest.getByLabel("ルームコード", { exact: true }).fill(code);
   await guest.getByLabel("パスコード", { exact: true }).fill("secret12");
   await guest.getByRole("button", { name: "参加する", exact: true }).click();
-  await expect(
-    guest.getByRole("heading", { name: "2人の参加が完了しました" }),
-  ).toBeVisible();
-  await expect(
-    host.getByRole("heading", { name: "2人の参加が完了しました" }),
-  ).toBeVisible();
+  await expect(guest.getByRole("heading", { name: "初期配置" })).toBeVisible();
+  await expect(host.getByRole("heading", { name: "初期配置" })).toBeVisible();
   await guest.reload();
   await expect(guest.locator(".players")).toContainText("ゲスト（あなた）");
   await host.reload();
@@ -67,6 +63,16 @@ test("作成・参加・復帰・満員・360px 表示", async ({ browser }) => 
     path: "test-results/room-ready-desktop.png",
     fullPage: true,
   });
+  // 別々のブラウザで配置を確定し、先手が一行動した後も再読み込みで復帰できる。
+  await host.getByRole("button", { name: "配置を確定" }).click();
+  await guest.getByRole("button", { name: "配置を確定" }).click();
+  await expect(host.getByRole("heading", { name: "対戦中" })).toBeVisible();
+  await expect(guest.getByRole("heading", { name: "対戦中" })).toBeVisible();
+  const first = (await host.getByText("あなたの手番").count()) ? host : guest;
+  await first.getByRole("button", { name: "左旋回" }).click();
+  await expect(first.getByText("第1手：TURN_LEFT")).toBeVisible();
+  await first.reload();
+  await expect(first.getByText("第1手：TURN_LEFT")).toBeVisible();
   await hostContext.close();
   await guestContext.close();
   await thirdContext.close();

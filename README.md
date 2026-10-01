@@ -1,6 +1,6 @@
 # 深海戦術
 
-plan.md の Phase 1（ルームと認証）、Phase 2（ゲームエンジン）の実装です。作成・参加・待機・リロード復帰までをブラウザで確認できます。ゲームエンジンは単体で動作し、初期配置・行動 API と対戦画面は後続フェーズです。
+plan.md の Phase 1〜3 の実装です。作成・参加・初期配置・交互の行動・リロード復帰までをブラウザで確認できます。盤面を使った本格的な対戦画面は Phase 4 で追加します。
 
 ## 開発環境
 
@@ -32,18 +32,18 @@ npx playwright install --with-deps chromium
 npm run verify:emulators
 ```
 
-統合テストは Firestore Emulator と実際の Express API を使います。E2E は Hosting rewrite と Functions Emulator を通り、独立ブラウザで作成・参加・リロード復帰・三人目の拒否を検証します。360pxとデスクトップのスクリーンショットは `test-results/` に保存します。CIでは自動的にアップロードします。
+統合テストは Firestore Emulator と実際の Express API を使い、二重送信・古い version・並行行動・秘密ビューも検証します。E2E は Hosting rewrite と Functions Emulator を通り、独立ブラウザで作成・参加・配置・行動・リロード復帰・三人目の拒否を検証します。360pxとデスクトップのスクリーンショットは `test-results/` に保存します。CIでは自動的にアップロードします。
 
 ## 構成
 
 - `functions/src/`: PBKDF2、token hash、Firestore repository、HTTP API
 - `src/shared/`: 型、設定、seed付き盤面、純粋ゲームエンジン
-- `web/src/`: ルーム画面と sessionStorage を使う復帰
+- `web/src/`: ルーム・配置・行動画面と sessionStorage を使う復帰
 - `tests/`: ゲーム単体・暗号・Rules・Emulator API・E2E
 - `docs/adr-001-phase1-2.md`: 未決事項の判断と確認した公式資料
 - [検証結果とスクリーンショット](docs/validation-phase1-2.md)
 
-`GET /api/v1/health`、`POST /api/v1/rooms`、`POST /api/v1/rooms/:code/join`、`GET /api/v1/rooms/:code/state`、`POST /api/v1/rooms/:code/leave` を提供します。state/leave は `Authorization: Bearer` が必要です。state は ETag による条件付きGETにも対応します。
+`GET /api/v1/health`、`POST /api/v1/rooms`、`POST /api/v1/rooms/:code/join`、`GET /api/v1/rooms/:code/state`、`POST /api/v1/rooms/:code/placement`、`POST /api/v1/rooms/:code/actions`、`POST /api/v1/rooms/:code/leave` を提供します。state/placement/actions/leave は `Authorization: Bearer` が必要です。state は ETag による条件付きGETにも対応します。actions は `actionId`（UUID）、`expectedVersion`、`action` を要求し、同じ ID の再送は確定済み結果を返します。
 
 ## Firebase プロジェクト
 

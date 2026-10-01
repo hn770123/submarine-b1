@@ -1,4 +1,4 @@
-/** Firestore transaction で二席の予約と token 認証を一貫して行う repository。 */
+/** Firestore transaction で席・配置・行動を確定し、本人専用ビューを返す repository。 */
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   Firestore,
@@ -7,7 +7,16 @@ import {
   type DocumentReference,
 } from "firebase-admin/firestore";
 import { ROOM_CONFIG, GAME_CONFIG } from "../../src/shared/game-config.js";
-import { generateBoard } from "../../src/shared/engine.js";
+import {
+  createGame,
+  generateBoard,
+  resolveAction,
+  validPlacement,
+  type Action,
+  type Board,
+  type GameState,
+  type Pose,
+} from "../../src/shared/engine.js";
 import type { RoomView, JoinedRoom } from "../../src/shared/api.js";
 import {
   hashPasscode,
@@ -24,22 +33,24 @@ interface Player {
   displayName: string;
   tokenHash: string;
   placementReady: boolean;
+  placement?: Pose;
   knowledgeState: object;
   joinedAt: Timestamp;
   lastSeenAt: Timestamp;
 }
 interface Room extends PasscodeHash {
   roomCode: string;
-  status: "waiting" | "placement" | "expired";
+  status: "waiting" | "placement" | "playing" | "finished" | "expired";
   version: number;
   rulesVersion: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
   expiresAt: Timestamp;
-  gameState: object | null;
-  turnPlayerId: null;
+  gameState: { board: Board } | GameState;
+  history?: { turn: number; playerId: string; action: Action }[];
+  turnPlayerId: string | null;
   turnNumber: number;
-  winnerPlayerId: null;
+  winnerPlayerId: string | null;
 }
 /** 期限は TTL の非同期削除を待たず、API の処理時刻で検査する。 */
 function checkExpiry(room: Room): void {
@@ -48,7 +59,7 @@ function checkExpiry(room: Room): void {
 }
 /** 秘密値をコピーせず、許可済みの表示項目だけからレスポンスを組み立てる。 */
 function view(room: Room, players: Player[], self: Player): RoomView {
-  return {
+  const result: RoomView = {
     roomCode: room.roomCode,
     status: room.status,
     version: room.version,
@@ -66,6 +77,36 @@ function view(room: Room, players: Player[], self: Player): RoomView {
         placementReady: p.placementReady,
       })),
   };
+  // 配置前は共通盤面と本人の配置のみを公開し、相手の確定位置は返さない。
+  if (room.status === "placement") {
+    result.board = room.gameState.board;
+    if (self.placement) result.placement = self.placement;
+  }
+  if (room.status === "playing" || room.status === "finished") {
+    const state = room.gameState as GameState;
+    result.game = {
+      board: state.board,
+      self: state.submarines[self.playerId],
+      knowledge: state.knowledge[self.playerId],
+      ownTorpedoes: state.torpedoes.filter((t) => t.owner === self.playerId),
+      turnNumber: state.turnNumber,
+      yourTurn:
+        room.status === "playing" && state.turnPlayerId === self.playerId,
+      winner:
+        room.status !== "finished"
+          ? null
+          : state.winnerPlayerId === null
+            ? "draw"
+            : state.winnerPlayerId === self.playerId
+              ? "self"
+              : "opponent",
+      history: (room.history ?? []).map((h) => ({
+        turn: h.turn,
+        action: h.playerId === self.playerId ? h.action : "OPPONENT_TURN",
+      })),
+    };
+  }
+  return result;
 }
 export class RoomRepository {
   /** 接続先を注入し、Emulator と本番で同じ処理を使用する。 */
@@ -129,6 +170,7 @@ export class RoomRepository {
         updatedAt: now,
         expiresAt,
         gameState: { board: generateBoard(seed) },
+        history: [],
         turnPlayerId: null,
         turnNumber: 0,
         winnerPlayerId: null,
@@ -226,6 +268,175 @@ export class RoomRepository {
       );
       const self = this.authenticate(players, token);
       return view(room, players, self);
+    });
+  }
+  /** 本人の配置だけを確定し、二人が揃った取引で先手と対戦状態を決める。 */
+  async placement(code: string, token: string, pose: Pose): Promise<RoomView> {
+    // 取引の再実行でも先手が変わらないよう、乱数は外側で一度だけ生成する。
+    const firstSeat = randomBytes(1)[0] % 2 === 0 ? "host" : "guest";
+    return this.db.runTransaction(async (tx) => {
+      const { ref, room } = await this.readRoom(tx, code);
+      const players = (await tx.get(ref.collection("players"))).docs.map(
+        (d) => d.data() as Player,
+      );
+      const self = this.authenticate(players, token);
+      if (self.placementReady) {
+        if (
+          self.placement?.x !== pose.x ||
+          self.placement.y !== pose.y ||
+          self.placement.direction !== pose.direction
+        )
+          throw new ApiError(
+            409,
+            "PLACEMENT_LOCKED",
+            "配置はすでに確定しています。",
+          );
+        return view(room, players, self);
+      }
+      if (room.status !== "placement" || players.length !== 2)
+        throw new ApiError(
+          409,
+          "NOT_PLACEMENT",
+          "配置できる状態ではありません。",
+        );
+      if (!validPlacement(room.gameState.board, pose, self.seat))
+        throw new ApiError(
+          400,
+          "INVALID_PLACEMENT",
+          "配置域または海域を確認してください。",
+        );
+      const updatedSelf = { ...self, placementReady: true, placement: pose };
+      const updatedPlayers = players.map((p) =>
+        p.playerId === self.playerId ? updatedSelf : p,
+      );
+      const ready = updatedPlayers.every((p) => p.placementReady);
+      const ordered = [...updatedPlayers].sort((a, b) =>
+        a.seat === "host" ? -1 : b.seat === "host" ? 1 : 0,
+      );
+      const game = ready
+        ? createGame(
+            room.gameState.board.seed,
+            Object.fromEntries(ordered.map((p) => [p.playerId, p.placement!])),
+            ordered.find((p) => p.seat === firstSeat)!.playerId,
+          )
+        : null;
+      const updated: Room = {
+        ...room,
+        status: ready ? "playing" : "placement",
+        version: room.version + 1,
+        updatedAt: Timestamp.now(),
+        gameState: game ?? room.gameState,
+        turnPlayerId: game?.turnPlayerId ?? null,
+        turnNumber: game?.turnNumber ?? 0,
+      };
+      tx.update(ref.collection("players").doc(self.playerId), {
+        placementReady: true,
+        placement: pose,
+      });
+      tx.update(ref, {
+        status: updated.status,
+        version: updated.version,
+        updatedAt: updated.updatedAt,
+        gameState: updated.gameState,
+        turnPlayerId: updated.turnPlayerId,
+        turnNumber: updated.turnNumber,
+      });
+      return view(updated, updatedPlayers, updatedSelf);
+    });
+  }
+  /** 行動 ID を room 内で一意に保存し、再送時は確定済みの本人ビューを返す。 */
+  async action(
+    code: string,
+    token: string,
+    actionId: string,
+    expectedVersion: number,
+    action: Action,
+  ): Promise<RoomView> {
+    return this.db.runTransaction(async (tx) => {
+      const { ref, room } = await this.readRoom(tx, code);
+      const players = (await tx.get(ref.collection("players"))).docs.map(
+        (d) => d.data() as Player,
+      );
+      const self = this.authenticate(players, token);
+      const actionRef = ref.collection("actions").doc(actionId);
+      const previous = await tx.get(actionRef);
+      if (previous.exists) {
+        if (
+          previous.get("playerId") !== self.playerId ||
+          previous.get("actionType") !== action
+        )
+          throw new ApiError(
+            409,
+            "ACTION_ID_REUSED",
+            "行動 ID が再利用されています。",
+          );
+        return previous.get("resultView") as RoomView;
+      }
+      if (room.status !== "playing")
+        throw new ApiError(409, "NOT_PLAYING", "対戦中ではありません。");
+      if (room.turnPlayerId !== self.playerId)
+        throw new ApiError(403, "NOT_YOUR_TURN", "相手の手番です。");
+      if (room.version !== expectedVersion)
+        throw new ApiError(
+          409,
+          "STALE_VERSION",
+          "状態を更新してから操作してください。",
+        );
+      let game: GameState;
+      try {
+        game = resolveAction(
+          room.gameState as GameState,
+          self.playerId,
+          action,
+        );
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "INVALID_ACTION";
+        if (["BLOCKED_MOVE", "NO_AMMO"].includes(code))
+          throw new ApiError(
+            400,
+            code,
+            code === "NO_AMMO"
+              ? "魚雷が残っていません。"
+              : "その方向には進めません。",
+          );
+        throw error;
+      }
+      const history = [
+        ...(room.history ?? []),
+        { turn: room.turnNumber, playerId: self.playerId, action },
+      ].slice(-40);
+      const updated: Room = {
+        ...room,
+        gameState: game,
+        history,
+        status: game.status,
+        turnPlayerId: game.turnPlayerId,
+        turnNumber: game.turnNumber,
+        winnerPlayerId: game.winnerPlayerId,
+        version: room.version + 1,
+        updatedAt: Timestamp.now(),
+      };
+      const result = view(updated, players, self);
+      tx.update(ref, {
+        gameState: game,
+        history,
+        status: updated.status,
+        turnPlayerId: updated.turnPlayerId,
+        turnNumber: updated.turnNumber,
+        winnerPlayerId: updated.winnerPlayerId,
+        version: updated.version,
+        updatedAt: updated.updatedAt,
+      });
+      tx.create(actionRef, {
+        playerId: self.playerId,
+        turnNumber: room.turnNumber,
+        actionType: action,
+        actionPayload: {},
+        resultSummary: { version: updated.version, status: updated.status },
+        resultView: result,
+        createdAt: updated.updatedAt,
+      });
+      return result;
     });
   }
   /** 配置前のゲスト退出は席を解放し、ホスト退出はルームを無効にする。 */
