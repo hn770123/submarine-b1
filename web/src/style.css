@@ -4,9 +4,12 @@
   color: #e6f5f7;
   background: #061d28;
   --surface: #0b2c38;
-  --line: #537a87;
+  --surface-raised: #103947;
+  --line: #7195a0;
   --accent: #a4f1df;
   --danger: #ffc5af;
+  --warning: #ffe1a3;
+  --muted: #c4dce3;
 }
 * {
   box-sizing: border-box;
@@ -18,6 +21,10 @@ main {
   width: min(100%, 540px);
   margin: auto;
   padding: 32px 20px;
+}
+.main-game {
+  width: min(100%, 760px);
+  padding-top: 8px;
 }
 h1 {
   font-size: 2.5rem;
@@ -34,7 +41,7 @@ h2 {
 .intro,
 .hint,
 small {
-  color: #b9d3dc;
+  color: var(--muted);
   line-height: 1.6;
 }
 section {
@@ -43,6 +50,69 @@ section {
   border: 1px solid var(--line);
   padding: 20px;
   border-radius: 12px;
+}
+.main-game .room-panel {
+  margin-top: 8px;
+}
+.main-game .intro {
+  display: none;
+}
+.main-game .eyebrow {
+  margin: 0;
+}
+.main-game h1 {
+  margin: 3px 0;
+}
+.main-game h2 {
+  margin: 0 0 5px;
+}
+.main-game .room-meta {
+  flex-wrap: nowrap;
+  font-size: 0.8rem;
+}
+.main-game .room-meta .code {
+  font-size: clamp(0.9rem, 3.6vw, 1.3rem);
+  letter-spacing: 0;
+}
+.main-game .text-button {
+  padding: 4px;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+.matchup {
+  margin: 4px 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.room-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.room-meta .code {
+  margin-left: 6px;
+}
+.text-button {
+  border: 0;
+  text-decoration: underline;
+  min-height: 36px;
+}
+.connection {
+  margin: 8px 0;
+  font-size: 0.9rem;
+}
+.online {
+  color: var(--accent);
+}
+.offline,
+.network-error {
+  color: var(--warning);
+}
+.expiry {
+  font-size: 0.8rem;
+  color: var(--muted);
 }
 .modes {
   display: flex;
@@ -74,10 +144,11 @@ button[aria-pressed="true"],
 }
 button:disabled {
   opacity: 0.55;
-  cursor: wait;
+  cursor: not-allowed;
 }
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 3px solid #ffe1a3;
   outline-offset: 3px;
 }
@@ -120,13 +191,17 @@ small {
 }
 .players span {
   display: block;
-  color: #b9d3dc;
+  color: var(--muted);
   font-size: 0.8rem;
 }
 .notice {
-  border-left: 3px solid #ffe1a3;
+  border-left: 3px solid var(--warning);
   padding-left: 12px;
   line-height: 1.6;
+}
+.field-error {
+  color: var(--danger);
+  grid-column: 1 / -1;
 }
 .error {
   color: var(--danger);
@@ -154,6 +229,234 @@ small {
 }
 .game-info {
   line-height: 1.5;
+}
+.turn-banner {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 6px 0;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  font-size: 1.15rem;
+  font-weight: 800;
+}
+.my-turn {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.their-turn {
+  border-style: dashed;
+  color: var(--warning);
+}
+.turn-number {
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.result-copy {
+  border-left: 4px solid var(--warning);
+  padding-left: 10px;
+}
+.instruments {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 5px;
+}
+.instruments > div {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-raised);
+}
+.instruments span {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.instruments strong {
+  display: block;
+  font-size: clamp(0.8rem, 3vw, 1rem);
+  font-variant-numeric: tabular-nums;
+}
+meter {
+  width: 100%;
+  height: 0.6rem;
+  accent-color: var(--accent);
+}
+.board-wrap {
+  margin: 5px 0;
+}
+.board {
+  display: grid;
+  width: 100%;
+  gap: 1px;
+  padding: 2px;
+  background: #496a75;
+  border: 2px solid var(--line);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.axis {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  font-size: clamp(0.5rem, 1.5vw, 0.7rem);
+  font-variant-numeric: tabular-nums;
+  color: #f3fbfc;
+  background: #173c49;
+}
+.sea-cell {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  min-width: 0;
+  color: #dff5f4;
+  background: #0a2833;
+  font-size: clamp(0.7rem, 2.4vw, 1.1rem);
+  line-height: 1;
+  font-weight: 900;
+}
+.sea-zone {
+  background: #174354;
+}
+.sea-reef {
+  color: #fff1d6;
+  background: repeating-linear-gradient(135deg, #405d65 0 3px, #2a444d 3px 6px);
+}
+.sea-candidate {
+  color: #fbe4ad;
+  background:
+    radial-gradient(circle at center, #b78f48 1px, transparent 2px), #273d44;
+  border: 1px dashed #ecc978;
+}
+.sea-observed {
+  color: #fff0b8;
+  background: #594925;
+  outline: 2px double #f9d77c;
+  outline-offset: -3px;
+}
+.sea-mine {
+  color: #08312c;
+  background: #a4f1df;
+  border: 2px solid #e6fff7;
+}
+.sea-torpedo {
+  color: #291900;
+  background: #ffd28a;
+  border: 2px solid #fff0c8;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 0;
+  margin: 6px 0;
+  list-style: none;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.legend-symbol {
+  display: inline-grid;
+  place-items: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  margin-right: 3px;
+  font-weight: 900;
+}
+.intel-line {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.warning {
+  border: 2px dashed var(--warning);
+  padding: 8px;
+  color: var(--warning);
+  font-weight: 700;
+}
+.controls {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.controls h3,
+.intel-details h3 {
+  margin-bottom: 4px;
+}
+.controls .hint {
+  margin: 3px 0 10px;
+}
+.actions button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #062520;
+}
+.confirmation {
+  margin-top: 10px;
+  padding: 12px;
+  border: 2px solid var(--warning);
+  border-radius: 8px;
+  background: #253c40;
+}
+.confirmation h4 {
+  margin: 0;
+}
+.confirmation p {
+  margin: 6px 0 12px;
+}
+.confirm-buttons {
+  display: flex;
+  gap: 8px;
+}
+.confirm-buttons button {
+  flex: 1;
+}
+.intel-details {
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+}
+.intel-details ol {
+  padding-left: 1.5rem;
+}
+.intel-details li {
+  padding: 3px 0;
+}
+@media (max-width: 400px) {
+  main {
+    padding: 14px 10px;
+  }
+  .main-game h1 {
+    font-size: 1.5rem;
+  }
+  .main-game .intro {
+    margin: 2px 0;
+  }
+  section {
+    padding: 12px;
+    margin-top: 14px;
+  }
+  .main-game .players,
+  .main-game .expiry {
+    margin: 5px 0;
+  }
+  .main-game .players li {
+    padding: 4px 0;
+  }
+  .main-game .players span {
+    display: inline;
+    margin-right: 5px;
+  }
+  .instruments {
+    gap: 3px;
+  }
+  .instruments > div {
+    padding: 5px;
+  }
+  .main-game .room-panel {
+    padding: 10px;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   *,

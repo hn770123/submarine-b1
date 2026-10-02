@@ -1,10 +1,29 @@
 /** ルーム参加から配置・対戦・同じタブの再読み込み復帰までを提供する画面。 */
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import type { JoinedRoom, RoomView, Session } from "../../src/shared/api";
-import type { Action } from "../../src/shared/engine";
+import { validPlacement, type Action } from "../../src/shared/engine";
+import { GAME_CONFIG } from "../../src/shared/game-config";
+import { TacticalBoard } from "./Board";
 import "./style.css";
 const SESSION_KEY = "submarine-session-v1";
+const ACTION_LABELS: Record<Action, string> = {
+  MOVE_FORWARD: "前進",
+  TURN_LEFT: "左旋回",
+  TURN_RIGHT: "右旋回",
+  ACTIVE_SONAR: "アクティブソナー",
+  FIRE_TORPEDO: "魚雷発射",
+};
+const DIRECTIONS = { N: "北", E: "東", S: "南", W: "西" } as const;
+/** 秘密を推測せず、観測された出来事だけを短い日本語へ変換する。 */
+function eventLabel(event: {
+  kind: "LAUNCH" | "EXPLOSION" | "APPROACH";
+  direction?: keyof typeof DIRECTIONS;
+}): string {
+  if (event.kind === "LAUNCH") return "魚雷の発射音を探知";
+  if (event.kind === "EXPLOSION") return "爆発を探知";
+  return `${event.direction ? `${DIRECTIONS[event.direction]}から` : "近くで"}魚雷接近`;
+}
 /** 保存形式を検査し、壊れた保存データを token として扱わない。 */
 function readSession(): Session | null {
   try {
@@ -47,8 +66,13 @@ function App() {
   const [mode, setMode] = useState<"create" | "join">("create");
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
+    [networkError, setNetworkError] = useState(""),
     [connected, setConnected] = useState(false),
     [copied, setCopied] = useState(false);
+  const [pendingAction, setPendingAction] = useState<Action | null>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const turnBannerRef = useRef<HTMLDivElement>(null);
+  const actionButtonRef = useRef<HTMLButtonElement | null>(null);
   const [pose, setPose] = useState({
     x: 5,
     y: 1,
@@ -72,6 +96,12 @@ function App() {
         current.y < 12 ? { ...current, y: 13, direction: "N" } : current,
       );
   }, [view?.status, view?.self.seat, view?.placement]);
+  useEffect(() => {
+    if (pendingAction) confirmRef.current?.focus();
+  }, [pendingAction]);
+  useEffect(() => {
+    if (view?.game && !view.game.yourTurn) setPendingAction(null);
+  }, [view?.version, view?.game?.yourTurn]);
   /** 更新競合や通信失敗の後、認証済み状態をすぐに読み直す。 */
   async function refresh() {
     if (!session) return;
@@ -83,6 +113,18 @@ function App() {
     );
     acceptView(next);
     setConnected(true);
+    setNetworkError("");
+  }
+  /** 手動再接続の失敗を画面に残し、Promise の未処理例外を防ぐ。 */
+  async function reconnect() {
+    try {
+      await refresh();
+    } catch (e) {
+      setConnected(false);
+      setNetworkError(
+        e instanceof Error ? e.message : "再接続に失敗しました。",
+      );
+    }
   }
   useEffect(() => {
     if (!session) return;
@@ -101,11 +143,13 @@ function App() {
         if (controller.signal.aborted) return;
         acceptView(data);
         setConnected(true);
-        setError("");
+        setNetworkError("");
       } catch (e) {
         if (controller.signal.aborted) return;
         setConnected(false);
-        setError(e instanceof Error ? e.message : "通信に失敗しました。");
+        setNetworkError(
+          e instanceof Error ? e.message : "通信に失敗しました。",
+        );
       }
       if (!controller.signal.aborted) timer = setTimeout(poll, 2000);
     }
@@ -174,6 +218,8 @@ function App() {
     setView(null);
     setError("");
     setConnected(false);
+    setNetworkError("");
+    setPendingAction(null);
   }
   /** 秘密 token を含めず、共有用ルームコードだけをコピーする。 */
   async function copy() {
@@ -236,15 +282,32 @@ function App() {
       }
     } finally {
       setBusy(false);
+      setPendingAction(null);
+      requestAnimationFrame(() => turnBannerRef.current?.focus());
     }
   }
+  /** 選択した操作を送信前に見せ、確認ボタンへキーボード焦点を移す。 */
+  function chooseAction(action: Action, button: HTMLButtonElement) {
+    actionButtonRef.current = button;
+    setPendingAction(action);
+    setError("");
+  }
+  /** キャンセル後は操作元へ焦点を戻し、キーボード操作を続けられるようにする。 */
+  function cancelAction() {
+    setPendingAction(null);
+    actionButtonRef.current?.focus();
+  }
   return (
-    <main>
+    <main className={view?.game ? "main-game" : undefined}>
       <p className="eyebrow">SUBMARINE / 01</p>
       <h1>深海戦術</h1>
       <p className="intro">見えない相手と、静かな駆け引き。</p>
       {session ? (
-        <section aria-labelledby="room-heading">
+        <section
+          className="room-panel"
+          aria-labelledby="room-heading"
+          aria-busy={busy}
+        >
           <h2 id="room-heading">
             {view?.status === "placement"
               ? "初期配置"
@@ -254,28 +317,65 @@ function App() {
                   ? "対戦終了"
                   : "相手の参加を待っています"}
           </h2>
-          <p>ルームコード</p>
-          <p className="code">{session.roomCode}</p>
-          <button onClick={copy}>
-            {copied ? "コピーしました" : "コードをコピー"}
-          </button>
-          <p role="status">
-            {connected ? "● 接続中" : "△ 再接続中 — 表示が古い可能性があります"}
+          <div className="room-meta">
+            <span>
+              ルーム <strong className="code">{session.roomCode}</strong>
+            </span>
+            <button className="text-button" onClick={copy}>
+              {copied ? "コピーしました" : "コードをコピー"}
+            </button>
+          </div>
+          <p
+            className={`connection ${connected ? "online" : "offline"}`}
+            role="status"
+          >
+            {connected
+              ? "● 接続中"
+              : view
+                ? "△ 再接続中 — 表示が古い可能性があります"
+                : "△ 読み込み中"}
           </p>
+          {!connected && (
+            <button
+              className="secondary"
+              onClick={() => void reconnect()}
+              disabled={!session}
+            >
+              今すぐ再接続
+            </button>
+          )}
+          {networkError && (
+            <p className="network-error" role="alert">
+              {networkError}
+            </p>
+          )}
           {view && (
             <>
-              <ul className="players">
-                {view.players.map((p) => (
-                  <li key={p.seat}>
-                    <span>{p.seat === "host" ? "ホスト" : "ゲスト"}</span>
-                    <strong>{p.displayName}</strong>
-                    {p.seat === view.self.seat ? "（あなた）" : ""}
-                  </li>
-                ))}
-              </ul>
-              <p>
-                有効期限：{new Date(view.expiresAt).toLocaleString("ja-JP")}
-              </p>
+              {view.game ? (
+                <p className="matchup">
+                  {view.players
+                    .map(
+                      (p) =>
+                        `${p.displayName}${p.seat === view.self.seat ? "（あなた）" : ""}`,
+                    )
+                    .join(" 対 ")}
+                </p>
+              ) : (
+                <>
+                  <ul className="players">
+                    {view.players.map((p) => (
+                      <li key={p.seat}>
+                        <span>{p.seat === "host" ? "ホスト" : "ゲスト"}</span>
+                        <strong>{p.displayName}</strong>
+                        {p.seat === view.self.seat ? "（あなた）" : ""}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="expiry">
+                    有効期限：{new Date(view.expiresAt).toLocaleString("ja-JP")}
+                  </p>
+                </>
+              )}
             </>
           )}
           {view?.status === "placement" && (
@@ -285,6 +385,13 @@ function App() {
                 {view.self.seat === "host" ? "上側 0〜2 行" : "下側 12〜14 行"}
                 。相手の配置は表示されません。
               </p>
+              {view.board && (
+                <TacticalBoard
+                  board={view.board}
+                  self={view.placement ?? pose}
+                  placementZone={view.self.seat}
+                />
+              )}
               {view.placement ? (
                 <p>配置確定済み。相手を待っています。</p>
               ) : (
@@ -332,18 +439,35 @@ function App() {
                   </label>
                   <button
                     className="primary"
-                    disabled={busy || !connected}
+                    disabled={
+                      busy ||
+                      !connected ||
+                      !view.board ||
+                      !validPlacement(view.board, pose, view.self.seat)
+                    }
                     onClick={place}
                   >
-                    配置を確定
+                    {busy ? "配置を送信中…" : "配置を確定"}
                   </button>
+                  {view.board &&
+                    !validPlacement(view.board, pose, view.self.seat) && (
+                      <p className="field-error">
+                        選択した位置は配置できません。
+                      </p>
+                    )}
                 </div>
               )}
             </div>
           )}
           {view?.game && (
             <div className="game-info">
-              <p role="status">
+              <div
+                ref={turnBannerRef}
+                tabIndex={-1}
+                className={`turn-banner ${view.game.yourTurn ? "my-turn" : "their-turn"}`}
+                role="status"
+                aria-live="polite"
+              >
                 {view.status === "finished"
                   ? view.game.winner === "self"
                     ? "勝利"
@@ -353,50 +477,183 @@ function App() {
                   : view.game.yourTurn
                     ? "あなたの手番"
                     : "相手の手番を待っています"}{" "}
-                · 第{view.game.turnNumber}手
-              </p>
-              <p>
-                自艦：({view.game.self.x}, {view.game.self.y}){" "}
-                {view.game.self.direction} · HP {view.game.self.hp} · 魚雷{" "}
-                {view.game.self.ammo}
-              </p>
-              <p>
-                観測 {view.game.knowledge.observations.length}件 · 候補{" "}
-                {view.game.knowledge.candidates.length}件 · 警報{" "}
-                {view.game.knowledge.events.length}件
-              </p>
-              {view.status === "playing" && (
-                <div className="actions">
-                  {(
-                    [
-                      ["MOVE_FORWARD", "前進"],
-                      ["TURN_LEFT", "左旋回"],
-                      ["TURN_RIGHT", "右旋回"],
-                      ["ACTIVE_SONAR", "ソナー"],
-                      ["FIRE_TORPEDO", "魚雷発射"],
-                    ] as [Action, string][]
-                  ).map(([action, label]) => (
-                    <button
-                      key={action}
-                      disabled={busy || !connected || !view.game?.yourTurn}
-                      onClick={() => act(action)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
+                <span className="turn-number">第{view.game.turnNumber}手</span>
+              </div>
+              {view.status === "finished" && (
+                <p className="result-copy">
+                  {view.game.winner === "self"
+                    ? "敵艦を撃沈しました。"
+                    : view.game.winner === "draw"
+                      ? "両艦が沈没しました。"
+                      : "自艦が沈没しました。"}{" "}
+                  行動履歴を確認して、次の対戦へ進めます。
+                </p>
               )}
-              <h3>履歴</h3>
-              <ol>
-                {view.game.history.map((item) => (
-                  <li key={item.turn}>
-                    第{item.turn}手：
-                    {item.action === "OPPONENT_TURN"
-                      ? "相手の行動"
-                      : item.action}
-                  </li>
-                ))}
-              </ol>
+              {view.status === "playing" && (
+                <>
+                  <div className="instruments">
+                    <div>
+                      <span>自艦 HP</span>
+                      <strong>
+                        {view.game.self.hp} / {GAME_CONFIG.initialHp}
+                      </strong>
+                      <meter
+                        min="0"
+                        max={GAME_CONFIG.initialHp}
+                        value={view.game.self.hp}
+                        aria-label="自艦 HP"
+                      />
+                    </div>
+                    <div>
+                      <span>魚雷 残弾</span>
+                      <strong>
+                        {view.game.self.ammo} / {GAME_CONFIG.torpedoes}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>位置・向き</span>
+                      <strong>
+                        ({view.game.self.x}, {view.game.self.y}){" "}
+                        {DIRECTIONS[view.game.self.direction]}
+                      </strong>
+                    </div>
+                  </div>
+                  <TacticalBoard
+                    board={view.game.board}
+                    self={view.game.self}
+                    knowledge={view.game.knowledge}
+                    ownTorpedoes={view.game.ownTorpedoes}
+                  />
+                  <div className="intel-line">
+                    敵候補{" "}
+                    {
+                      new Set(
+                        view.game.knowledge.candidates.map(
+                          (p) => `${p.x},${p.y}`,
+                        ),
+                      ).size
+                    }
+                    マス · 自分の魚雷 {view.game.ownTorpedoes.length}発
+                  </div>
+                  {view.game.knowledge.events.length > 0 && (
+                    <p className="warning" role="status">
+                      最新警報（第{view.game.knowledge.events.at(-1)!.turn}
+                      手）：
+                      {eventLabel(view.game.knowledge.events.at(-1)!)}
+                    </p>
+                  )}
+                  <div className="controls" aria-label="行動パネル">
+                    <h3>行動を選ぶ</h3>
+                    <p className="hint">1手番に1行動。選択後に確認できます。</p>
+                    <div className="actions">
+                      {(
+                        Object.entries(ACTION_LABELS) as [Action, string][]
+                      ).map(([action, label]) => (
+                        <button
+                          key={action}
+                          aria-pressed={pendingAction === action}
+                          disabled={
+                            busy ||
+                            !connected ||
+                            !view.game?.yourTurn ||
+                            (action === "FIRE_TORPEDO" &&
+                              view.game.self.ammo === 0)
+                          }
+                          onClick={(event) =>
+                            chooseAction(action, event.currentTarget)
+                          }
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    {pendingAction && (
+                      <div
+                        className="confirmation"
+                        aria-labelledby="confirm-heading"
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") cancelAction();
+                        }}
+                      >
+                        <h4 id="confirm-heading">
+                          {ACTION_LABELS[pendingAction]}を実行しますか？
+                        </h4>
+                        <p>
+                          {pendingAction === "ACTIVE_SONAR"
+                            ? "探知できますが、自艦の位置も相手に伝わります。"
+                            : pendingAction === "FIRE_TORPEDO"
+                              ? "現在の向きに魚雷を1発発射します。"
+                              : "実行すると相手の手番になります。"}
+                        </p>
+                        <div className="confirm-buttons">
+                          <button
+                            ref={confirmRef}
+                            className="primary"
+                            disabled={busy || !connected || !view.game.yourTurn}
+                            onClick={() => void act(pendingAction)}
+                          >
+                            {busy ? "実行中…" : "実行する"}
+                          </button>
+                          <button disabled={busy} onClick={cancelAction}>
+                            キャンセル
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {busy && <p role="status">行動を送信しています…</p>}
+                  </div>
+                </>
+              )}
+              <div className="intel-details">
+                {view.status === "playing" && (
+                  <>
+                    <h3>探知情報</h3>
+                    {view.game.knowledge.observations.length ? (
+                      <p>
+                        最終観測：第
+                        {view.game.knowledge.observations.at(-1)!.turn}
+                        手、({
+                          view.game.knowledge.observations.at(-1)!.pose.x
+                        }, {view.game.knowledge.observations.at(-1)!.pose.y}){" "}
+                        {
+                          DIRECTIONS[
+                            view.game.knowledge.observations.at(-1)!.pose
+                              .direction
+                          ]
+                        }
+                        向き
+                      </p>
+                    ) : (
+                      <p>敵艦の確定位置はまだありません。</p>
+                    )}
+                    {view.game.ownTorpedoes.length > 0 && (
+                      <p>
+                        航行中の魚雷：
+                        {view.game.ownTorpedoes
+                          .map(
+                            (t) =>
+                              `(${t.x}, ${t.y}) ${DIRECTIONS[t.direction]}向き`,
+                          )
+                          .join("、")}
+                      </p>
+                    )}
+                  </>
+                )}
+                <h3>行動履歴</h3>
+                {view.game.history.length === 0 && (
+                  <p>対戦開始。最初の行動を待っています。</p>
+                )}
+                <ol>
+                  {[...view.game.history].reverse().map((item) => (
+                    <li key={item.turn}>
+                      第{item.turn}手：
+                      {item.action === "OPPONENT_TURN"
+                        ? "相手の行動"
+                        : ACTION_LABELS[item.action]}
+                    </li>
+                  ))}
+                </ol>
+              </div>
             </div>
           )}
           {(view?.status === "waiting" || view?.status === "placement") &&
