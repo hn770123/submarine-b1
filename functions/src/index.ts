@@ -13,5 +13,12 @@ export const api = onRequest(
     minInstances: 0,
     maxInstances: 4,
   },
-  createApp(new RoomRepository(getFirestore())),
+  createApp(
+    new RoomRepository(getFirestore()),
+    process.env.FUNCTIONS_EMULATOR === "true"
+      ? "off"
+      : process.env.APP_CHECK_MODE === "enforce"
+        ? "enforce"
+        : "monitor",
+  ),
 );

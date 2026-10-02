@@ -14,7 +14,7 @@
     "rewrites": [
       {
         "source": "/api/**",
-        "function": { "functionId": "api", "region": "asia-northeast1" }
+        "function": { "functionId": "api", "region": "asia-northeast1", "pinTag": true }
       },
       { "source": "**", "destination": "/index.html" }
     ],

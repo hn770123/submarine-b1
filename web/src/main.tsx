@@ -5,6 +5,7 @@ import type { JoinedRoom, RoomView, Session } from "../../src/shared/api";
 import { validPlacement, type Action } from "../../src/shared/engine";
 import { GAME_CONFIG } from "../../src/shared/game-config";
 import { TacticalBoard } from "./Board";
+import { appCheckHeader } from "./app-check";
 import "./style.css";
 const SESSION_KEY = "submarine-session-v1";
 const ACTION_LABELS: Record<Action, string> = {
@@ -50,6 +51,7 @@ async function request<T>(
     headers: {
       ...(body ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(await appCheckHeader()),
     },
     body: body ? JSON.stringify(body) : undefined,
     signal,

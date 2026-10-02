@@ -5,6 +5,8 @@ import express, {
   type NextFunction,
 } from "express";
 import { randomUUID } from "node:crypto";
+import { getAppCheck } from "firebase-admin/app-check";
+import { logger } from "firebase-functions";
 import { z } from "zod";
 import { RoomRepository } from "./repository.js";
 import { ApiError } from "./errors.js";
@@ -45,7 +47,12 @@ function bearer(req: Request, required = true): string | undefined {
   return value.slice(7);
 }
 /** repository を注入して本番関数と統合テストで同じ API を使う。 */
-export function createApp(repository: RoomRepository) {
+export function createApp(
+  repository: RoomRepository,
+  appCheckMode: "off" | "monitor" | "enforce" = "off",
+  verifyAppCheck: (token: string) => Promise<unknown> = (token) =>
+    getAppCheck().verifyToken(token),
+) {
   const app = express();
   app.disable("x-powered-by");
   app.use((req, res, next) => {
@@ -66,6 +73,29 @@ export function createApp(repository: RoomRepository) {
     next();
   });
   app.use(express.json({ limit: "4kb" }));
+  // health は外部監視に公開し、ゲーム API だけを検証対象にする。
+  app.use((req, res, next) => {
+    if (appCheckMode === "off" || req.path === "/api/v1/health") {
+      next();
+      return;
+    }
+    const token = req.get("X-Firebase-AppCheck");
+    if (!token) {
+      logger.warn("app_check_rejected", { reason: "missing", requestId: res.locals.requestId });
+      if (appCheckMode === "enforce") return next(new ApiError(401, "APP_CHECK_REQUIRED", "接続を確認してください。"));
+      next();
+      return;
+    }
+    verifyAppCheck(token)
+      .then(() => next())
+      .catch(() => {
+        // token と検証例外には秘密値が含まれ得るため、理由分類のみ記録する。
+        logger.warn("app_check_rejected", { reason: "invalid", requestId: res.locals.requestId });
+        if (appCheckMode === "enforce")
+          next(new ApiError(401, "APP_CHECK_INVALID", "接続を確認してください。"));
+        else next();
+      });
+  });
   /** 非同期の失敗を統一エラーハンドラへ引き渡す。 */
   const route =
     (handler: (req: Request, res: Response) => Promise<void>) =>
